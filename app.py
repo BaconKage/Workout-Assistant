@@ -987,14 +987,19 @@ INDEX_HTML = """
 
           if (!sending) {
             sending = true;
-            camCanvas.toBlob(async (blob) => {
-              const fd = new FormData();
-              fd.append('frame', blob, 'frame.jpg');
-              try { await fetch('{{ url_for("upload_frame") }}', { method: 'POST', body: fd }); }
-              catch(e) {}
-              finally { sending = false; }
-            }, 'image/jpeg', 0.7);
-          }
+            try {
+              const dataUrl = camCanvas.toDataURL('image/jpeg', 0.7); // base64
+              await fetch('{{ url_for("upload_frame") }}', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({ image_b64: dataUrl })
+               }); 
+          } catch(e) {
+            console.error('upload_frame error', e);
+          } finally {
+            sending = false;
+            }
+          } 
           setTimeout(()=>requestAnimationFrame(loop), 100); // ~10 fps
         };
         requestAnimationFrame(loop);
@@ -1022,7 +1027,7 @@ INDEX_HTML = """
     }
 
     startCamera();
-    tryMjpegThenFallback();
+    startPeekPolling();
   </script>
 </body>
 </html>
