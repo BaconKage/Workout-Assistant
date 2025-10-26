@@ -408,6 +408,10 @@ def draw_colored_pose(image, landmarks, color=(0, 255, 0), thickness=3):
 # ========== Flask ==========
 app = Flask(__name__)
 
+@app.route('/health')
+def health():
+    return "ok", 200
+
 # ====== Browser uploads raw frames to this endpoint ======
 @app.route('/upload_frame', methods=['POST'])
 def upload_frame():
@@ -440,6 +444,7 @@ def upload_frame():
         img = cv2.flip(img, 1)
 
         with latest_frame_lock:
+            global latest_client_frame
             latest_client_frame = img
         return jsonify({"ok": True})
     except Exception as e:
@@ -453,7 +458,12 @@ def video_frames():
         with latest_frame_lock:
             frame = None if latest_client_frame is None else latest_client_frame.copy()
         if frame is None:
-            time.sleep(0.03)
+            # send a tiny placeholder until first client frame arrives
+            blk = np.zeros((360, 640, 3), dtype=np.uint8)
+            ok2, jpeg_blk = cv2.imencode('.jpg', blk, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            chunk = jpeg_blk.tobytes() if ok2 else b''
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + chunk + b'\r\n')
+            time.sleep(0.1)
             continue
 
         frame_idx += 1
@@ -476,9 +486,9 @@ def video_frames():
         debug = {}
 
         l_ang = r_ang = avg_ang = None
+        pose_detected = False
         rep_happened = False
         rep_entry = None
-        pose_detected = False
 
         if res.pose_landmarks:
             pose_detected = True
@@ -1201,7 +1211,12 @@ def index():
 
 @app.route('/video_feed')
 def video_feed():
-    return Response(video_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    # No-cache headers help some browsers keep MJPEG updating
+    resp = Response(video_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 @app.route('/set_mode', methods=['POST'])
 def set_mode():
