@@ -408,10 +408,6 @@ def draw_colored_pose(image, landmarks, color=(0, 255, 0), thickness=3):
 # ========== Flask ==========
 app = Flask(__name__)
 
-@app.route('/health')
-def health():
-    return "ok", 200
-
 # ====== Browser uploads raw frames to this endpoint ======
 @app.route('/upload_frame', methods=['POST'])
 def upload_frame():
@@ -444,7 +440,6 @@ def upload_frame():
         img = cv2.flip(img, 1)
 
         with latest_frame_lock:
-            global latest_client_frame
             latest_client_frame = img
         return jsonify({"ok": True})
     except Exception as e:
@@ -458,12 +453,7 @@ def video_frames():
         with latest_frame_lock:
             frame = None if latest_client_frame is None else latest_client_frame.copy()
         if frame is None:
-            # send a tiny placeholder until first client frame arrives
-            blk = np.zeros((360, 640, 3), dtype=np.uint8)
-            ok2, jpeg_blk = cv2.imencode('.jpg', blk, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            chunk = jpeg_blk.tobytes() if ok2 else b''
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + chunk + b'\r\n')
-            time.sleep(0.1)
+            time.sleep(0.03)
             continue
 
         frame_idx += 1
@@ -486,9 +476,9 @@ def video_frames():
         debug = {}
 
         l_ang = r_ang = avg_ang = None
-        pose_detected = False
         rep_happened = False
         rep_entry = None
+        pose_detected = False
 
         if res.pose_landmarks:
             pose_detected = True
@@ -753,11 +743,9 @@ INDEX_HTML = """
     .pane{
       border:1px solid var(--stroke);
       background:linear-gradient(135deg, rgba(16,20,40,.60), rgba(12,16,34,.54));
-      backdrop-filter: blur(10px); border-radius:var(--radius); box-shadow:var(--shadow);
-      padding:14px; position:absolute; inset:0; opacity:0; transform: translateY(12px) scale(.98);
-      transition: opacity .35s ease, transform .35s ease; pointer-events:none;
+      backdrop-filter: blur(10px); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px; position:relative;
+      animation: pop .4s ease-out;
     }
-    .pane.show{ opacity:1; transform: translateY(0) scale(1); pointer-events:auto; position:relative }
     .pane h3{ margin:0 0 8px; font-size:16px; opacity:.95 }
     .pane p{ margin:6px 0; color:#cbd6ff; font-size:14px; line-height:1.6 }
 
@@ -788,82 +776,6 @@ INDEX_HTML = """
     .muted{color:var(--muted); font-size:13px}
     ul.reasons{margin:8px 0 0 18px; padding:0}
     ul.reasons li{margin:6px 0; color:#cbd6ff}
-
-    /* ===== Inline analysis (fallback) ===== */
-    .analysis h3{margin:.2rem 0 .6rem; font-size:1.06rem}
-    .analysis .callout{
-      display:flex; gap:10px; align-items:flex-start;
-      background:#0f1426; border:1px solid var(--stroke);
-      padding:12px 14px; border-radius:14px; margin:.6rem 0
-    }
-    .analysis .dot{width:10px;height:10px;border-radius:50%}
-    .analysis .good{background:var(--good)}
-    .analysis .warn{background:var(--amber)}
-    .analysis .bad{background:var(--bad)}
-    .analysis ul{margin:.35rem 0 .9rem 1.1rem}
-    .analysis li{margin:.3rem 0}
-    .analysis .targets{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px }
-    .analysis .target{ background:#0f1426; border:1px solid var(--stroke); border-radius:12px; padding:12px }
-
-    /* ===== Toast ===== */
-    .toast{
-      position:fixed; top:16px; right:16px; background:#0e1220; color:#fff;
-      border:1px solid var(--stroke); padding:10px 14px; border-radius:12px;
-      box-shadow:var(--shadow); opacity:0; transform:translateY(-8px);
-      transition: opacity .25s ease, transform .25s ease; z-index:8
-    }
-    .toast.show{opacity:1; transform:translateY(0)}
-
-    /* ===== Modal (AI Analysis Overlay) ===== */
-    .modal{
-      position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:20;
-      background: rgba(10,12,21,.45); backdrop-filter: blur(10px);
-      animation: fadeBg .25s ease;
-    }
-    .modal.show{ display:flex; }
-    @keyframes fadeBg { from {opacity:0} to {opacity:1} }
-    .modal-card{
-      width:min(900px, 92vw); max-height:80vh; overflow:auto;
-      border:1px solid var(--stroke);
-      background:linear-gradient(135deg, rgba(18,22,42,.85), rgba(12,16,34,.88));
-      backdrop-filter: blur(14px);
-      border-radius:22px; box-shadow:0 30px 90px rgba(0,0,0,.55);
-      padding:18px 18px 10px; transform: translateY(12px); opacity:0;
-      animation: slideUp .28s ease forwards;
-    }
-    .modal-header{
-      display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px;
-      position:sticky; top:0; background:linear-gradient(180deg, rgba(12,16,34,.96), rgba(12,16,34,.88));
-      backdrop-filter: blur(6px); border-bottom:1px solid var(--stroke); border-top-left-radius:18px; border-top-right-radius:18px;
-      padding:10px 6px 12px;
-    }
-    .modal-title{
-      font-weight:800; font-size:18px;
-      background: linear-gradient(90deg, #fff, var(--accent) 90%);
-      -webkit-background-clip:text; background-clip:text; color:transparent;
-    }
-    .modal-close{
-      border:1px solid var(--stroke); background:#141a33; color:#fff;
-      padding:10px 12px; border-radius:12px; cursor:pointer; font-weight:700;
-      transition:transform .08s ease, background .2s ease, border-color .2s ease;
-    }
-    .modal-close:hover{ background:#1a2244; border-color:#2c3966; transform:translateY(-1px) }
-    .blurred{ filter: blur(6px) saturate(.95) brightness(.95); transform: scale(.998); transition: filter .25s ease, transform .25s ease; }
-
-    /* ===== Analyze loader ===== */
-    .btn-analyze{
-      background:linear-gradient(135deg, #748dff, #8ca9ff); color:#0b0f19; border:none;
-      box-shadow:0 14px 34px rgba(116,141,255,.28); position:relative;
-    }
-    .btn-analyze.loading{
-      opacity:.9; animation:pulse 1.2s ease-in-out infinite;
-      pointer-events:none;
-    }
-    @keyframes pulse{ 0%{box-shadow:0 0 0 0 rgba(140,169,255,.28)} 70%{box-shadow:0 0 0 16px rgba(140,169,255,0)} 100%{box-shadow:0 0 0 0 rgba(140,169,255,0)} }
-    .spinner{
-      display:inline-block; width:16px; height:16px; border:2px solid #eaf0ff; border-top-color:#5f7cff;
-      border-radius:50%; margin-left:8px; vertical-align:middle; animation: spin .8s linear infinite;
-    }
   </style>
 </head>
 <body>
@@ -907,30 +819,6 @@ INDEX_HTML = """
       </div>
     </div>
 
-    <!-- ===== Secondary Navigation Tabs ===== -->
-    <div class="secnav" role="tablist" aria-label="Information">
-      <div class="tab active" role="tab" aria-selected="true" data-pane="about">About</div>
-      <div class="tab" role="tab" aria-selected="false" data-pane="who">Who It's For</div>
-      <div class="tab" role="tab" aria-selected="false" data-pane="how">How It Works</div>
-    </div>
-    <div class="tabpanes">
-      <div id="pane-about" class="pane show" role="tabpanel">
-        <h3>About My Gym Workout Buddy</h3>
-        <p>Real-time form tracking for strength training. Workout Buddy uses computer vision to measure
-           motion and posture, giving instant cues and an AI summary after each set.</p>
-      </div>
-      <div id="pane-who" class="pane" role="tabpanel">
-        <h3>Who It’s For</h3>
-        <p>Beginners who want safe guidance, athletes chasing perfect form, and coaches who need quick,
-           visual feedback for clients during curls and other movements.</p>
-      </div>
-      <div id="pane-how" class="pane" role="tabpanel">
-        <h3>How It Works</h3>
-        <p>Stand in view of the camera and press <b>Start</b>. Do your set. We measure joint angles and stability,
-           count clean reps, and generate a clear AI summary with fixes when you press <b>Analyze</b>.</p>
-      </div>
-    </div>
-
     <!-- ===== Main Workout Area ===== -->
     <div class="grid">
       <div class="card" aria-label="Camera feed">
@@ -959,27 +847,12 @@ INDEX_HTML = """
       </div>
     </div>
 
-    <!-- Inline analysis fallback (kept for accessibility) -->
-    <div class="card analysis" style="margin-top:16px;" aria-label="AI analysis">
+    <!-- Inline analysis fallback -->
+    <div class="card" style="margin-top:16px;" aria-label="AI analysis">
       <div class="muted">AI Analysis</div>
       <div id="analysis" style="margin-top: 6px;">Click <b>Analyze</b> for a refined recap of your set.</div>
     </div>
   </div>
-
-  <!-- ===== Modal Overlay for AI Analysis ===== -->
-  <div id="analysis-modal" class="modal" aria-hidden="true" aria-label="AI Summary Modal">
-    <div class="modal-card">
-      <div class="modal-header">
-        <div class="modal-title">AI Summary • My Gym Buddy</div>
-        <button id="modal-close" class="modal-close" type="button">Close</button>
-      </div>
-      <div id="modal-body" class="analysis" style="padding:8px 6px 14px;">
-        <!-- AI HTML goes here -->
-      </div>
-    </div>
-  </div>
-
-  <div id="toast" class="toast" role="status" aria-live="polite">Saved</div>
 
   <script>
     // gradient sheen follows cursor on buttons
@@ -990,30 +863,8 @@ INDEX_HTML = """
       });
     });
 
-    // ===== Tabs logic =====
-    const tabs = document.querySelectorAll('.tab');
-    const panes = {
-      about: document.getElementById('pane-about'),
-      who: document.getElementById('pane-who'),
-      how: document.getElementById('pane-how'),
-    };
-    tabs.forEach(t=>{
-      t.addEventListener('click', ()=>{
-        tabs.forEach(x=>x.classList.remove('active'));
-        t.classList.add('active');
-        const key = t.dataset.pane;
-        Object.entries(panes).forEach(([k,el])=>{
-          if(k===key){ el.classList.add('show'); } else { el.classList.remove('show'); }
-        });
-      });
-    });
+    const toast = document.createElement('div');
 
-    const toast = document.getElementById('toast');
-    function showToast(msg) {
-      toast.textContent = msg;
-      toast.classList.add('show');
-      setTimeout(()=>toast.classList.remove('show'), 1200);
-    }
     async function postForm(form, onJSON) {
       const fd = new FormData(form);
       const res = await fetch(form.action, { method: 'POST', body: fd });
@@ -1022,7 +873,6 @@ INDEX_HTML = """
         const data = await res.json();
         if (onJSON) onJSON(data);
       }
-      showToast('Done');
     }
 
     // ===== Forms =====
@@ -1047,48 +897,12 @@ INDEX_HTML = """
     });
     document.getElementById('debug-form').addEventListener('submit', e => { e.preventDefault(); postForm(e.target); });
 
-    // ===== Analyze: button loader + modal + blur =====
-    const modal = document.getElementById('analysis-modal');
-    const modalBody = document.getElementById('modal-body');
-    const modalClose = document.getElementById('modal-close');
-    const appRoot = document.getElementById('app-root');
-    const analyzeBtn = document.getElementById('analyze-btn');
-
-    function openModal(html){
-      modalBody.innerHTML = html || '<div class="callout"><span class="dot warn"></span><div>No analysis.</div></div>';
-      modal.classList.add('show');
-      modal.setAttribute('aria-hidden','false');
-      appRoot.classList.add('blurred');
-      document.body.style.overflow = 'hidden';
-    }
-    function closeModal(){
-      modal.classList.remove('show');
-      modal.setAttribute('aria-hidden','true');
-      appRoot.classList.remove('blurred');
-      document.body.style.overflow = '';
-    }
-    modalClose.addEventListener('click', closeModal);
-    modal.addEventListener('click', (e)=>{ if(e.target === modal) closeModal(); });
-    document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape') closeModal(); });
-
     document.getElementById('analyze-form').addEventListener('submit', e => {
       e.preventDefault();
-      analyzeBtn.classList.add('loading');
-      const originalLabel = analyzeBtn.innerHTML;
-      analyzeBtn.innerHTML = 'Analyzing<span class="spinner"></span>';
-
-      openModal('<div class="callout"><span class="dot warn"></span><div>Analyzing your set… this takes a moment.</div></div>');
-
-      const panel = document.getElementById('analysis'); // fallback text
+      const panel = document.getElementById('analysis');
       panel.innerHTML = 'Analyzing…';
-
       postForm(e.target, (data) => {
-        const html = data.html || 'No analysis.';
-        panel.innerHTML = html;
-        modalBody.innerHTML = html;
-
-        analyzeBtn.classList.remove('loading');
-        analyzeBtn.innerHTML = originalLabel;
+        panel.innerHTML = data.html || 'No analysis.';
       });
     });
 
@@ -1119,7 +933,6 @@ INDEX_HTML = """
           const li = document.createElement('li'); li.textContent = reason; elReasons.appendChild(li);
         });
         elFeedback.textContent = s.last_feedback || '—';
-        if (s.posture_ok) { videoEl.classList.add('okglow'); } else { videoEl.classList.remove('okglow'); }
 
         if (s.exercise_name && s.exercise_name !== '—') {
           modePill.textContent = s.exercise_name;
@@ -1129,7 +942,7 @@ INDEX_HTML = """
             modeInput.value = normalized;
           }
         }
-      } catch (e) {}
+      } catch (_) {}
       setTimeout(poll, 800);
     }
     poll();
@@ -1141,7 +954,6 @@ INDEX_HTML = """
         method:'POST',
         body: new URLSearchParams({mode:m})
       });
-      showToast && showToast(`Mode: ${m}`);
     }
     document.addEventListener('keydown', (e) => {
       const k = e.key.toLowerCase();
@@ -1183,9 +995,7 @@ INDEX_HTML = """
               finally { sending = false; }
             }, 'image/jpeg', 0.7);
           }
-
-          // target ~10 fps to balance quality/cost
-          setTimeout(()=>requestAnimationFrame(loop), 100);
+          setTimeout(()=>requestAnimationFrame(loop), 100); // ~10 fps
         };
         requestAnimationFrame(loop);
       } catch (err) {
@@ -1193,8 +1003,26 @@ INDEX_HTML = """
         alert('Please allow camera access to use Workout Buddy.');
       }
     }
-    // Start immediately
+
+    // Try MJPEG first; fall back to polling /peek.jpg if it doesn’t render quickly.
+    let fallbackTimer;
+    function tryMjpegThenFallback() {
+      videoEl.src = '{{ url_for("video_feed") }}';
+      // If no pixels appear within ~3s, switch to /peek.jpg loop
+      fallbackTimer = setTimeout(startPeekPolling, 3000);
+      videoEl.onload = () => { clearTimeout(fallbackTimer); };
+    }
+
+    function startPeekPolling() {
+      function tick() {
+        videoEl.src = '/peek.jpg?ts=' + Date.now();
+        setTimeout(tick, 100); // ~10 fps
+      }
+      tick();
+    }
+
     startCamera();
+    tryMjpegThenFallback();
   </script>
 </body>
 </html>
@@ -1209,14 +1037,31 @@ def index():
         rep_log=os.path.relpath(REP_LOG_PATH, os.getcwd())
     )
 
+# --- STREAM: unbuffered MJPEG so Render/NGINX don’t stall it ---
 @app.route('/video_feed')
 def video_feed():
-    # No-cache headers help some browsers keep MJPEG updating
-    resp = Response(video_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
-    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    resp.headers['Pragma'] = 'no-cache'
-    resp.headers['Expires'] = '0'
-    return resp
+    return Response(
+        video_frames(),
+        mimetype='multipart/x-mixed-replace; boundary=frame',
+        headers={
+            'X-Accel-Buffering': 'no',
+            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'Connection': 'keep-alive',
+        }
+    )
+
+# --- SNAPSHOT: latest processed frame (fallback/debug) ---
+@app.route('/peek.jpg')
+def peek_jpg():
+    with latest_frame_lock:
+        frame = None if latest_client_frame is None else latest_client_frame.copy()
+    if frame is None:
+        tiny = np.zeros((1, 1, 3), dtype=np.uint8)
+        ok, jpeg = cv2.imencode('.jpg', tiny, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return Response(jpeg.tobytes(), mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})
+    ok, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    return Response(jpeg.tobytes(), mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})
 
 @app.route('/set_mode', methods=['POST'])
 def set_mode():
