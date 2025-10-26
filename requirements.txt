@@ -1,11 +1,10 @@
 Flask==3.0.3
 gunicorn==22.0.0
 
-# Core compute libs
-numpy>=1.24.0,<2.1
+# Prebuilt wheels to avoid long compiles
+numpy==1.26.4
 opencv-python-headless==4.10.0.84
-mediapipe==0.10.14
-protobuf>=3.20.3,<5.0.0  # avoids common mediapipe/protobuf conflicts
+mediapipe==0.10.13
+protobuf>=3.20.3,<5.0.0
 
-# OpenAI SDK
 openai>=1.47.0,<2.0.0
