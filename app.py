@@ -461,8 +461,7 @@ def video_frames():
             # send a tiny placeholder until first client frame arrives
             blk = np.zeros((360, 640, 3), dtype=np.uint8)
             ok2, jpeg_blk = cv2.imencode('.jpg', blk, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            chunk = jpeg_blk.tobytes() if ok2 else b''
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpg.tobytes() + b'\r\n')
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg_blk.tobytes() + b'\r\n')
             time.sleep(0.1)
             continue
 
