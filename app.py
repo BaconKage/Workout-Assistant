@@ -462,7 +462,7 @@ def video_frames():
             blk = np.zeros((360, 640, 3), dtype=np.uint8)
             ok2, jpeg_blk = cv2.imencode('.jpg', blk, [cv2.IMWRITE_JPEG_QUALITY, 70])
             chunk = jpeg_blk.tobytes() if ok2 else b''
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + chunk + b'\r\n')
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpg.tobytes() + b'\r\n')
             time.sleep(0.1)
             continue
 
@@ -1213,9 +1213,11 @@ def index():
 def video_feed():
     # No-cache headers help some browsers keep MJPEG updating
     resp = Response(video_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    resp.headers['X-Accel-Buffering'] = 'no'
     resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     resp.headers['Pragma'] = 'no-cache'
     resp.headers['Expires'] = '0'
+    resp.headers['Connection'] = 'keep-alive'
     return resp
 
 @app.route('/set_mode', methods=['POST'])
