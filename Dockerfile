@@ -16,5 +16,5 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 COPY . .
 
-# Render injects $PORT; default to 10000 locally
-CMD ["/bin/sh", "-c", "gunicorn app:app -k gevent --timeout 180 --workers 2 --bind 0.0.0.0:${PORT:-10000}"]
+# CRITICAL: Use gevent worker for streaming performance (workers=1 for low memory/high concurrency)
+CMD ["/bin/sh", "-c", "gunicorn app:app -k gevent --timeout 180 --workers 1 --bind 0.0.0.0:${PORT:-10000}"]
