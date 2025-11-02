@@ -64,7 +64,7 @@ app_state = {
 latest_client_frame = None        # numpy BGR image
 latest_frame_lock = threading.Lock()
 
-# ========== Helpers (Unchanged) ==========
+# ========== Helpers ==========
 def ema(value, name, alpha=0.35):
     if value is None: return None
     d = app_state["ema_state"]
@@ -86,7 +86,7 @@ def calculate_angle(a, b, c):
     return float(np.degrees(np.arccos(np.clip(cosv, -1.0, 1.0))))
 
 def vec(p, q):
-    return np.array([q.x - p.x, q.y - p.y, q.z - p.z], dtype=float)
+    return np.array([q.x - p.x, q.y - p.x, q.z - p.z], dtype=float)
 
 def angle_between(v1, v2):
     n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
@@ -146,7 +146,7 @@ def sanitize(obj):
     except Exception:
         return str(obj)
 
-# ========== Logging (Unchanged) ==========
+# ========== Logging ==========
 def _ts():
     return datetime.utcnow().isoformat() + "Z"
 
@@ -160,7 +160,7 @@ def log_jsonl(path, obj):
 def log_frame(data): log_jsonl(FRAME_LOG_PATH, data)
 def log_rep(data):   log_jsonl(REP_LOG_PATH, data)
 
-# ========== Posture Check (curl) (Unchanged) ==========
+# ========== Posture Check (curl) ==========
 def posture_check_curl(lm_img, lm_world, debug=None):
     reasons = []
     per_arm_reasons = {"L": [], "R": []}
@@ -261,7 +261,7 @@ def posture_check_curl(lm_img, lm_world, debug=None):
 
     return ok, reasons, per_arm_reasons, out_metrics
 
-# ========== Posture Check (squat) — camera-agnostic (Unchanged) ==========
+# ========== Posture Check (squat) — camera-agnostic ==========
 def posture_check_squat(lm_img, lm_world, debug=None):
     """
     Camera-agnostic squat checks using world (3D) landmarks where possible.
@@ -392,7 +392,7 @@ def posture_check_squat(lm_img, lm_world, debug=None):
         })
     return posture_ok, reasons, per_side_reasons, out
 
-# ========== Video Drawing (Unchanged) ==========
+# ========== Video Drawing ==========
 def draw_colored_pose(image, landmarks, color=(0, 255, 0), thickness=3):
     h, w = image.shape[:2]
     pts = [(int(l.x * w), int(l.y * h)) for l in landmarks]
@@ -401,14 +401,14 @@ def draw_colored_pose(image, landmarks, color=(0, 255, 0), thickness=3):
     for (x, y) in pts:
         cv2.circle(image, (x, y), 3, color, -1)
 
-# ========== Flask (Unchanged) ==========
+# ========== Flask ==========
 app = Flask(__name__)
 
 @app.route('/health')
 def health():
     return "ok", 200
 
-# ====== Browser uploads raw frames to this endpoint (Unchanged) ======
+# ====== Browser uploads raw frames to this endpoint ======
 @app.route('/upload_frame', methods=['POST'])
 def upload_frame():
     """
@@ -444,11 +444,10 @@ def upload_frame():
             latest_client_frame = img
         return jsonify({"ok": True})
     except Exception as e:
-        # Logging the upload error for diagnostics
         print(f"[UPLOAD ERROR] {e}")
         return jsonify({"ok": False, "error": str(e)}), 500
 
-# ====== Generator that consumes uploaded frames and streams processed video (DIAGNOSTIC VERSION) ======
+# ====== Generator that consumes uploaded frames and streams processed video ======
 def video_frames():
     frame_idx = 0
     while True:
@@ -460,37 +459,185 @@ def video_frames():
         if frame is None:
             # send a tiny placeholder until first client frame arrives
             blk = np.zeros((360, 640, 3), dtype=np.uint8)
-            cv2.putText(blk, "WAITING FOR CAMERA UPLOAD...", (50, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             ok2, jpeg_blk = cv2.imencode('.jpg', blk, [cv2.IMWRITE_JPEG_QUALITY, 70])
             yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg_blk.tobytes() + b'\r\n')
             time.sleep(0.1)
             continue
         # --- End of Placeholder ---
 
+        # --- Re-enabled Pose Processing Logic ---
         try:
-            # =========================================================
-            # --- TEMPORARY DIAGNOSTIC CODE: Bypass MediaPipe and Pose ---
-            # =========================================================
-            
-            # Draw a visual marker to prove the frame was processed by the server
             frame_idx += 1
-            h, w = frame.shape[:2]
-            cv2.circle(frame, (w-50, 50), 20, (0, 255, 0), -1)
-            cv2.putText(frame, "DIAGNOSTIC ECHO - BYPASS ACTIVE", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            
-            # Reset counters and mode fields to prevent old data from polluting stats
-            with state_lock:
-                app_state["mode"] = "curl" # Set to a default mode for UI stability
-                app_state["curl_count"] = 0
-                app_state["curl_correct"] = 0
-                app_state["curl_stage"] = "down"
-                app_state["posture_ok"] = True # Assume OK in diagnostic mode
-                app_state["last_reasons"] = []
-                app_state["last_feedback"] = "Diagnostic Mode Active. (MediaPipe Bypassed)"
-                app_state["exercise_name"] = "Diagnostic Echo"
-                app_state["pose_detected"] = False
+            frame_time = time.time()
+            frame_utc = _ts()
 
-            # Encode and yield the frame (raw image returned)
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            res = pose.process(rgb)
+
+            with state_lock:
+                mode = app_state["mode"]
+                curl_count = app_state["curl_count"]
+                curl_correct = app_state["curl_correct"]
+                curl_stage = app_state["curl_stage"]
+
+            current_feedback = ""
+            reasons = []
+            form_ok = False
+            exercise_name = "—"
+            debug = {}
+
+            l_ang = r_ang = avg_ang = None
+            pose_detected = False
+            rep_happened = False
+            rep_entry = None
+
+            if res.pose_landmarks:
+                pose_detected = True
+                lm_img = res.pose_landmarks.landmark
+                lm_world = res.pose_world_landmarks.landmark if res.pose_world_landmarks else None
+
+                if mode == "curl":
+                    exercise_name = "Bicep Curl"
+                    P = mp_pose.PoseLandmark
+                    LSH_i = lm_img[P.LEFT_SHOULDER.value]
+                    LEL_i = lm_img[P.LEFT_ELBOW.value]
+                    LWR_i = lm_img[P.LEFT_WRIST.value]
+                    RSH_i = lm_img[P.RIGHT_SHOULDER.value]
+                    REL_i = lm_img[P.RIGHT_ELBOW.value]
+                    RWR_i = lm_img[P.RIGHT_WRIST.value]
+
+                    l_ang = calculate_angle(LSH_i, LEL_i, LWR_i)
+                    r_ang = calculate_angle(RSH_i, REL_i, RWR_i)
+                    avg_ang = (l_ang + r_ang) / 2.0
+
+                    form_ok, reasons, per_arm, metrics = posture_check_curl(lm_img, lm_world, debug=debug)
+
+                    MIN_CURL_TOP = 37
+                    MAX_CURL_BOTTOM = 163
+                    if avg_ang is not None and avg_ang >= MAX_CURL_BOTTOM:
+                        curl_stage = "down"
+                        current_feedback = "Ready: curl up."
+                    elif avg_ang is not None and avg_ang <= MIN_CURL_TOP and curl_stage == "down":
+                        curl_count += 1
+                        if form_ok:
+                            curl_correct += 1
+                        curl_stage = "up"
+                        current_feedback = "Great rep! Lower slowly."
+                        rep_happened = True
+                        rep_entry = {
+                            "ts": frame_utc,
+                            "epoch": frame_time,
+                            "session_id": SESSION_ID,
+                            "mode": "curl",
+                            "rep_index": curl_count,
+                            "rep_correct_total": curl_correct,
+                            "angles": {"left_elbow": l_ang, "right_elbow": r_ang, "avg_elbow": avg_ang},
+                            "posture_ok": form_ok,
+                            "reasons": reasons,
+                            "debug": debug
+                        }
+
+                    draw_colored_pose(frame, lm_img, color=(0, 255, 0) if form_ok else (0, 0, 255))
+
+                elif mode == "squat":
+                    exercise_name = "Squat"
+
+                    # 3D-aware posture check (front/side robust)
+                    form_ok, reasons, per_side, metrics = posture_check_squat(lm_img, lm_world, debug=debug)
+
+                    # Use knee flexion from metrics if present (3D), else fallback to 2D
+                    l_ang = metrics["L"].get("knee_deg")
+                    r_ang = metrics["R"].get("knee_deg")
+                    if l_ang is None or r_ang is None:
+                        P = mp_pose.PoseLandmark
+                        LKNE_i = lm_img[P.LEFT_KNEE.value]
+                        LHIP_i = lm_img[P.LEFT_HIP.value]
+                        LANK_i = lm_img[P.LEFT_ANKLE.value]
+                        RKNE_i = lm_img[P.RIGHT_KNEE.value]
+                        RHIP_i = lm_img[P.RIGHT_HIP.value]
+                        RANK_i = lm_img[P.RIGHT_ANKLE.value]
+                        l_ang = calculate_angle(LHIP_i, LKNE_i, LANK_i)
+                        r_ang = calculate_angle(RHIP_i, RKNE_i, RANK_i)
+
+                    avg_ang = (float(l_ang) + float(r_ang)) / 2.0 if (l_ang is not None and r_ang is not None) else None
+
+                    # Yaw-aware thresholds
+                    yaw_deg = debug.get("yaw_deg", 0.0)
+                    GOING_DOWN_TH = 152.0 - 2.0 * (yaw_deg / 45.0)   # ~152 → 150
+                    STAND_UP_TH   = 168.0 - 2.0 * (yaw_deg / 45.0)   # ~168 → 166
+                    DEPTH_ANGLE   = 112.0 + 3.0 * (yaw_deg / 45.0)   # ~112 → 115
+
+                    # Stage + min-angle tracking across the entire down phase
+                    if avg_ang is not None and avg_ang < GOING_DOWN_TH:
+                        if curl_stage != "down":
+                            app_state["squat_min_knee"] = 999.0
+                        curl_stage = "down"
+                        app_state["squat_min_knee"] = min(app_state["squat_min_knee"], avg_ang)
+                        current_feedback = "Sit back and down. Heels heavy."
+
+                    # Count when standing back up past threshold AND depth was achieved during down phase
+                    if avg_ang is not None and avg_ang > STAND_UP_TH and curl_stage == "down":
+                        min_in_down = app_state.get("squat_min_knee") or 999.0
+                        depth_reached = (
+                            (bool(metrics["L"].get("hip_below_knee")) and bool(metrics["R"].get("hip_below_knee")))
+                            or (min_in_down <= DEPTH_ANGLE)
+                        )
+                        if depth_reached:
+                            curl_count += 1
+                            if form_ok:
+                                curl_correct += 1
+                            current_feedback = "Nice rep! Stand tall and reset."
+                            rep_happened = True
+                            rep_entry = {
+                                "ts": frame_utc,
+                                "epoch": frame_time,
+                                "session_id": SESSION_ID,
+                                "mode": "squat",
+                                "rep_index": curl_count,
+                                "rep_correct_total": curl_correct,
+                                "angles": {
+                                    "L_knee": l_ang, "R_knee": r_ang, "avg_knee": avg_ang,
+                                    "min_in_down": min_in_down
+                                },
+                                "posture_ok": form_ok,
+                                "reasons": reasons,
+                                "debug": debug
+                            }
+                        curl_stage = "up"
+
+                    draw_colored_pose(frame, lm_img, color=(0, 255, 0) if form_ok else (0, 0, 255))
+
+            # ---- LOG: frame ----
+            frame_log = {
+                "ts": frame_utc,
+                "epoch": frame_time,
+                "session_id": SESSION_ID,
+                "frame_index": frame_idx,
+                "mode": mode,
+                "pose_detected": pose_detected,
+                "posture_ok": form_ok,
+                "reasons": reasons,
+                "angles": {"left_elbow": l_ang, "right_elbow": r_ang, "avg_elbow": avg_ang},  # kept keys; squat logs knees in rep log
+                "curl_stage": curl_stage,
+                "counters": {"curl_count": curl_count, "curl_correct": curl_correct},
+                "debug": debug
+            }
+            log_frame(frame_log)
+
+            # ---- LOG: rep ----
+            if rep_happened and rep_entry:
+                log_rep(rep_entry)
+
+            with state_lock:
+                app_state["curl_count"] = int(curl_count)
+                app_state["curl_correct"] = int(curl_correct)
+                app_state["curl_stage"] = curl_stage if isinstance(curl_stage, str) or curl_stage is None else str(curl_stage)
+                app_state["posture_ok"] = bool(form_ok)
+                app_state["last_reasons"] = list(reasons)
+                app_state["last_feedback"] = str(current_feedback)
+                app_state["exercise_name"] = exercise_name if mode in ("curl","squat") else "—"
+                app_state["pose_detected"] = bool(pose_detected)
+
             ok2, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if not ok2:
                 time.sleep(0.05)
@@ -500,13 +647,16 @@ def video_frames():
                    b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
             
         except Exception as e:
-            # Error Handling to catch any simple CV2 failures
-            print(f"[MJPEG STREAM ERROR - DIAGNOSTIC] Unhandled exception: {e}")
+            # Error Handling to catch any failure in the pose processing logic
+            print(f"[MJPEG STREAM ERROR] Unhandled exception in video_frames loop: {e}")
+            
+            # Send a clear error message to the client feed
             blk = np.zeros((360, 640, 3), dtype=np.uint8)
-            cv2.putText(blk, f"FATAL CV ERROR: {e}", (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            cv2.putText(blk, "STREAM CRASH. CHECK SERVER LOGS.", (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             ok2, jpeg_blk = cv2.imencode('.jpg', blk, [cv2.IMWRITE_JPEG_QUALITY, 70])
             if ok2:
                  yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg_blk.tobytes() + b'\r\n')
+            
             time.sleep(0.5)
             continue # Continue the while loop
 
@@ -1020,6 +1170,7 @@ INDEX_HTML = """
     // ===== Client-side camera capture to server =====
     const camVideo = document.createElement('video');
     camVideo.autoplay = true; camVideo.playsInline = true; camVideo.muted = true;
+    camVideo.crossOrigin = "anonymous"; // ADDED: Client-side fix for canvas rendering issues
     const camCanvas = document.createElement('canvas');
     let sending = false;
 
@@ -1032,7 +1183,10 @@ INDEX_HTML = """
           if (!camVideo.videoWidth) { requestAnimationFrame(loop); return; }
           camCanvas.width = camVideo.videoWidth;
           camCanvas.height = camVideo.videoHeight;
-          const ctx = camCanvas.getContext('2d', { willReadFrequently: true });
+          
+          // MODIFIED: Adding alpha:false often resolves issues with canvas and video rendering
+          const ctx = camCanvas.getContext('2d', { willReadFrequently: true, alpha: false }); 
+          
           ctx.drawImage(camVideo, 0, 0, camCanvas.width, camCanvas.height);
 
           if (!sending) {
@@ -1082,7 +1236,6 @@ def video_feed():
     resp.headers['Connection'] = 'keep-alive'
     return resp
 
-# ========== API Endpoints (Unchanged) ==========
 @app.route('/set_mode', methods=['POST'])
 def set_mode():
     mode = (request.form.get("mode") or "curl").strip().lower()
@@ -1145,7 +1298,7 @@ def stats():
         }
     return jsonify(sanitize(payload))
 
-# ========== GPT Analysis (Unchanged) ==========
+# ========== GPT Analysis ==========
 def read_jsonl_tail(path, n=800):
     if not os.path.exists(path): return []
     with open(path, "r", encoding="utf-8") as f:
